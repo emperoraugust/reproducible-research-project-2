@@ -1,0 +1,203 @@
+---
+title: 'Storm Events Database - A look at the most dangerous storm events in USA'
+author: "Giacinto Maggiore"
+date: "March,29 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+NWS's Storm Events Database contains the data about significant meteorological events, that are relevant for the public opinion  or that  have sufficient intensity to cause loss of life, injuries and economic consequences.
+
+Our goal is to determine which types of storm events are more harmful for the 
+people health and which types have the greatest economic consequences.
+
+## Data Processing
+
+```{r library,results = 'hide',message = FALSE, warning = FALSE}
+
+#Load the required packages
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("reshape2")) install.packages("reshape2")
+
+```
+
+The data for this assignment come in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. The uncrompressed file has a size of 410 MB. 
+
+There is also some documentation of the database available:
+
+[NWS Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+
+Data was downloaded and loaded into a dplyr tbl.
+
+
+```{r download,cache = TRUE}
+
+#Load the data 
+if(!dir.exists("Data")){
+      
+      dir.create("Data")
+}
+
+dirData<-"Data/stormData.csv.bz2"   #49 Mb -> uncompressed 409.4 Mb
+
+if(!file.exists(dirData)){
+      url<-
+      "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+      message("Download in progress.")
+      download.file(url,dirData)
+      message("Download completed.")
+}
+stormData<-tbl_df(read.csv(dirData))     #Take a long time - BE PATIENT
+```
+
+The stormData contains a lot of information as it can be seen:
+
+```{r viewData}
+names(stormData)
+stormData
+
+```
+
+Most of the information is not relevant to the analysis.
+The code following extracts the required data for health and economic impact analysis against weather.
+```{r processingData }
+stormData<-select(stormData,EVTYPE,FATALITIES,INJURIES,PROPDMG,PROPDMGEXP,
+                 CROPDMG,CROPDMGEXP)
+```
+
+The variables are:
+
+- EVTYPE      storm event type
+- FATALITIES  numbers of fatalities
+- INJURIES    numbers of injuries
+- PROPDMG     property damage in USD
+- PROPDMGEXP  magnitude of the property damage (exponent)
+- CROPDMG     crop damage in USD
+- CROPDMGEXP  magnitude of the crop damage (exponent)
+
+It is necessary to compute the sum of fatalaties and injuries and the total economic impact for each event type. The PROPDMGEXP and CROPDMGEXP contain some character for indicating the magnitude of the corresponding damage.
+
+```{r exponent}
+table(stormData$PROPDMGEXP)
+table(stormData$CROPDMGEXP)
+```
+ All the characters are substituted with the corresponding numerical exponential. The characters "?", "-","+","" are replaced by 1. 
+ 
+ 
+```{r expo}
+stormData$PROPDMGEXP<-
+      plyr::mapvalues(stormData$PROPDMGEXP, from = 
+                                      c("","-","?","+","0","1","2","3","4",
+                                        "5","6","7","8","B","h","H","K","m","M"),
+                                      to = 
+                                      c("0","0","0","0","0","1","2","3","4","5",
+                                        "6","7","8","9","2","2","3","6","6"))  
+
+stormData$CROPDMGEXP<-
+      plyr::mapvalues(stormData$CROPDMGEXP, from = 
+                                      c("","?","0","2","B","k","K","m","M"),
+                                      to = 
+                                      c("0","0","0","2","9","3","3","6","6"))
+
+stormData$PROPDMGEXP<-as.numeric(as.character(stormData$PROPDMGEXP))
+stormData$CROPDMGEXP<-as.numeric(as.character(stormData$CROPDMGEXP))
+
+```
+
+The total economic damages and total healt damages are computed by the following code. They are been stored in the data frame in the variables TOT_HEALTHDMG and TOT_ECONOMICDMG.
+
+```{r totaldamage}
+
+stormData<-
+      stormData %>% 
+            mutate(
+                  PROPDMG = PROPDMG*10^PROPDMGEXP,
+                  CROPDMG = CROPDMG*10^CROPDMGEXP) %>%
+            group_by(EVTYPE) %>%
+            summarise(
+                       FATALITIES = sum(FATALITIES),INJURIES = sum(INJURIES),
+                       PROPDMG = sum(PROPDMG), CROPDMG = sum(CROPDMG)
+                      ) %>%
+            mutate(
+                     TOT_HEALTHDMG = FATALITIES + INJURIES,
+                     TOT_ECONOMICDMG = PROPDMG + CROPDMG
+                  )
+
+
+```
+```{r}
+head(stormData)
+```
+
+##Results
+
+A new data frame, containing the first ten rows of storm events that are the most harmful for the health people,is constructed.Then a bar plot, that respresents the TOP 10 of event types for injuries and fatalities, is plotted.
+
+```{r helth damage}
+totalHealthData<-arrange(stormData,desc(TOT_HEALTHDMG))[1:10, ] #select TOP 10
+totalHealthData$EVTYPE<-as.factor(as.character(totalHealthData$EVTYPE))
+totalHealthData$EVTYPE <- factor(
+                              totalHealthData$EVTYPE,
+                              levels = totalHealthData$EVTYPE) #order levels
+
+
+totalHealthData<-melt(totalHealthData,
+                      id = "EVTYPE",
+                      measure.vars = c("INJURIES", "FATALITIES"))
+
+p1<-ggplot(totalHealthData, aes(x = EVTYPE, y = value, fill = variable)) +
+      geom_bar(stat = "identity") +
+      scale_fill_brewer(
+            palette="Paired",
+            labels=c("Injuries", "Fatalities"))+
+      xlab("Event types")+
+      ylab("Total human fatalities  and injuries") + 
+      ggtitle("TOP 10 of  event types most harmful for the people's health") +
+      theme(
+            axis.text.x = element_text(angle = 45, hjust = 1),
+            legend.title=element_blank()
+            ) 
+
+print(p1)
+
+```
+
+The event that is the most harmful for people's health is Tornado.  The second one most harmful is the excessive heat, but it causes much less vicitims than tornadoes.
+
+In the same way a bar plot, representing the TOP 10 of the storm event type for economic consequences, is constructed.
+
+```{r economic}
+totalEconomicData<-arrange(stormData,desc(TOT_ECONOMICDMG))[1:10, ]
+totalEconomicData$EVTYPE<-as.factor(as.character(totalEconomicData$EVTYPE))
+totalEconomicData$EVTYPE <- factor(totalEconomicData$EVTYPE, levels = totalEconomicData$EVTYPE)
+
+
+totalEconomicData<-melt(totalEconomicData,
+                      id = "EVTYPE",
+                      measure.vars = c("PROPDMG", "CROPDMG"))
+
+
+
+p2<-ggplot(totalEconomicData, aes(x = EVTYPE, y = value, fill = variable)) +
+      geom_bar(stat = "identity") +
+      scale_fill_brewer(
+            palette="Paired",
+            labels=c("Property Damage", "Crop Damage")
+            )+
+      xlab("Event types")+
+      ylab("Total property and crop damages") + 
+      ggtitle("TOP 10 of  event types for economic damages") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            legend.title=element_blank()) 
+
+print(p2)
+
+
+```
+
+The event that causes the greates economic damages is flood. Typhoons and  Tornadoes are respectively  the second and third ones. 
